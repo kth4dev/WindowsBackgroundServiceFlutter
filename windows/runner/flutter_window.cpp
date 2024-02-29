@@ -1,71 +1,143 @@
 #include "flutter_window.h"
+#include <flutter/event_channel.h>
+#include <flutter/event_sink.h>
+#include <flutter/event_stream_handler_functions.h>
+#include <flutter/method_channel.h>
+#include <flutter/standard_method_codec.h>
+#include <windows.h>
 
 #include <optional>
 
 #include "flutter/generated_plugin_registrant.h"
 
-FlutterWindow::FlutterWindow(const flutter::DartProject& project)
-    : project_(project) {}
+
+FlutterWindow::FlutterWindow(const flutter::DartProject &project) : project_(project) {}
 
 FlutterWindow::~FlutterWindow() {}
 
 bool FlutterWindow::OnCreate() {
-  if (!Win32Window::OnCreate()) {
-    return false;
-  }
+    if (!Win32Window::OnCreate()) {
+        return false;
+    }
 
-  RECT frame = GetClientArea();
+    RECT frame = GetClientArea();
 
-  // The size here must match the window dimensions to avoid unnecessary surface
-  // creation / destruction in the startup path.
-  flutter_controller_ = std::make_unique<flutter::FlutterViewController>(
-      frame.right - frame.left, frame.bottom - frame.top, project_);
-  // Ensure that basic setup of the controller was successful.
-  if (!flutter_controller_->engine() || !flutter_controller_->view()) {
-    return false;
-  }
-  RegisterPlugins(flutter_controller_->engine());
-  SetChildContent(flutter_controller_->view()->GetNativeWindow());
+    // The size here must match the window dimensions to avoid unnecessary surface
+    // creation / destruction in the startup path.
+    flutter_controller_ = std::make_unique<flutter::FlutterViewController>(frame.right - frame.left,
+                                                                           frame.bottom - frame.top,
+                                                                           project_);
+    // Ensure that basic setup of the controller was successful.
+    if (!flutter_controller_->engine() || !flutter_controller_->view()) {
+        return false;
+    }
+    RegisterPlugins(flutter_controller_->engine());
 
-  flutter_controller_->engine()->SetNextFrameCallback([&]() {
-    this->Show();
-  });
+    // flutter channel
+    flutter::MethodChannel<> channel(flutter_controller_->engine()->messenger(),
+                                     "services.kth.dev/logs",
+                                     &flutter::StandardMethodCodec::GetInstance());
+    channel.SetMethodCallHandler([](const flutter::MethodCall<> &call,
+                                    std::unique_ptr <flutter::MethodResult<>> result) {
+        if (call.method_name() == "start_service") {
+            // Check if the service is already installed
+            SC_HANDLE scm = OpenSCManager(nullptr, nullptr, SC_MANAGER_ALL_ACCESS);
+            if (scm != nullptr) {
+                SC_HANDLE service = OpenService(scm, L"Service1", SERVICE_START);
+                if (service != nullptr) {
+                    // Service is already installed, start it
+                    if (StartService(service, 0, nullptr) != 0) {
+                        result->Success("Success");
+                    } else {
+                        DWORD error = GetLastError();
+                        result->Error("START_SERVICE_FAILED",
+                                      "Failed to start the service. Error code: " +
+                                      std::to_string(error));
+                    }
+                    CloseServiceHandle(service);
+                } else {
+                    DWORD error = GetLastError();
+                    // Service is not installed, install it
+                    service = CreateService(scm, L"Service1", L"WinServTut.Demo",
+                                            SERVICE_ALL_ACCESS, SERVICE_WIN32_OWN_PROCESS,
+                                            SERVICE_AUTO_START, SERVICE_ERROR_NORMAL,
+                                            L"C:\\Users\\Admin\\source\\repos\\WindowsServiceTutorial\\WindowsServiceTutorial\\bin\\Debug\\WindowsServiceTutorial.exe",
+                                            nullptr, nullptr, nullptr, nullptr, nullptr);
 
-  // Flutter can complete the first frame before the "show window" callback is
-  // registered. The following call ensures a frame is pending to ensure the
-  // window is shown. It is a no-op if the first frame hasn't completed yet.
-  flutter_controller_->ForceRedraw();
+                    if (service != nullptr) {
+                        // Service installed successfully, start it
+                        if (StartService(service, 0, nullptr) != 0) {
+                            result->Success("Success");
+                        } else {
+                            error = GetLastError();
+                            result->Error("START_SERVICE_FAILED",
+                                          "Failed to start the service after installation. Error code: " +
+                                          std::to_string(error));
+                        }
+                        CloseServiceHandle(service);
+                    } else {
+                        error = GetLastError();
+                        result->Error("CREATE_SERVICE_FAILED",
+                                      "Failed to create the service. Error code: " +
+                                      std::to_string(error));
+                    }
+                }
+                CloseServiceHandle(scm);
+            } else {
+                DWORD error = GetLastError();
+                result->Error("OPEN_SCM_FAILED",
+                              "Failed to open the Service Control Manager. Error code: " +
+                              std::to_string(error));
+            }
 
-  return true;
+
+        } else {
+            result->NotImplemented();
+        }
+    });
+
+
+    SetChildContent(flutter_controller_->view()->GetNativeWindow());
+    flutter_controller_->engine()->SetNextFrameCallback([&]() {
+        this->Show();
+    });
+
+    // Flutter can complete the first frame before the "show window" callback is
+    // registered. The following call ensures a frame is pending to ensure the
+    // window is shown. It is a no-op if the first frame hasn't completed yet.
+    flutter_controller_->ForceRedraw();
+
+    return true;
 }
 
 void FlutterWindow::OnDestroy() {
-  if (flutter_controller_) {
-    flutter_controller_ = nullptr;
-  }
+    if (flutter_controller_) {
+        flutter_controller_ = nullptr;
+    }
 
-  Win32Window::OnDestroy();
+    Win32Window::OnDestroy();
 }
 
-LRESULT
-FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
-                              WPARAM const wparam,
-                              LPARAM const lparam) noexcept {
-  // Give Flutter, including plugins, an opportunity to handle window messages.
-  if (flutter_controller_) {
-    std::optional<LRESULT> result =
-        flutter_controller_->HandleTopLevelWindowProc(hwnd, message, wparam,
-                                                      lparam);
-    if (result) {
-      return *result;
-    }
-  }
+LRESULT FlutterWindow::MessageHandler(HWND hwnd, UINT const message, WPARAM const wparam,
+                                      LPARAM const lparam)
 
-  switch (message) {
-    case WM_FONTCHANGE:
-      flutter_controller_->engine()->ReloadSystemFonts();
-      break;
-  }
+noexcept {
+// Give Flutter, including plugins, an opportunity to handle window messages.
+if (flutter_controller_) {
+std::optional <LRESULT> result = flutter_controller_->HandleTopLevelWindowProc(hwnd, message,
+                                                                               wparam, lparam);
+if (result) {
+return *
+result;
+}}
 
-  return Win32Window::MessageHandler(hwnd, message, wparam, lparam);
+switch (message) {
+case WM_FONTCHANGE:
+flutter_controller_->engine()->ReloadSystemFonts();
+break;
+}
+
+return
+Win32Window::MessageHandler(hwnd, message, wparam, lparam
+);
 }

@@ -1,0 +1,12 @@
+{
+  "version": "0.2.1",
+  "defaults": {},
+  "configurations": [
+    {
+      "type": "default",
+      "project": "CMakeLists.txt",
+      "projectTarget": "windows_background_service_flutter.exe (runner\\windows_background_service_flutter.exe)",
+      "name": "windows_background_service_flutter.exe (runner\\windows_background_service_flutter.exe)"
+    }
+  ]
+}
